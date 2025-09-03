@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bilder – pCloud Galerie</title>
+  <style>
+    body { font-family: Inter, sans-serif; margin: 0; padding: 0; background: #fff; color: #333; }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 20px; }
+    header { display:flex; align-items:center; gap:10px; margin-bottom:20px; }
+    h1 { margin:0; font-size:1.6rem; color:#0f172a; }
+    .sub { font-size:.95rem; color:#64748b; }
+
+    .card { border:1px solid #e5e7eb; border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,0.06); background:#fff; }
+    .crumbs { padding:10px 14px; border-bottom:1px solid #f1f5f9; display:flex; gap:6px; flex-wrap:wrap; font-size:.9rem; }
+    .crumbs a { text-decoration:none; color:#2563eb; padding:2px 6px; border-radius:6px; }
+    .crumbs a:hover { background:#eff6ff; }
+    .crumbs .sep { color:#94a3b8; }
+
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; padding:14px; }
+    .tile { border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; background:#fff; box-shadow:0 2px 10px rgba(0,0,0,0.04); display:flex; flex-direction:column; cursor:pointer; transition:box-shadow .2s; }
+    .tile:hover { box-shadow:0 4px 16px rgba(0,0,0,0.08); }
+    .ph { background:#f8fafc; display:flex; align-items:center; justify-content:center; height:160px; overflow:hidden; }
+    .ph img { max-width:100%; max-height:100%; object-fit:contain; }
+    .meta { padding:8px 10px; font-size:.9rem; color:#334155; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; }
+    .toolbox { padding:8px 10px; display:flex; justify-content:center; }
+    .dl-btn { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid #e5e7eb; border-radius:8px; background:#fff; color:#1f2937; text-decoration:none; font-size:.9rem; }
+    .dl-btn:hover { background:#f8fafc; border-color:#cbd5e1; }
+
+    .empty { padding:20px; text-align:center; color:#94a3b8; }
+    .err { margin:10px; padding:10px; border:1px solid #fecaca; background:#fef2f2; color:#b91c1c; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Bilder – pCloud Galerie</h1>
+      <div class="sub">Einfach ansehen & herunterladen • Bilder & Videos direkt aus pCloud</div>
+    </header>
+
+    <section class="card">
+      <nav class="crumbs" id="crumbs"></nav>
+      <div id="error" class="err" style="display:none"></div>
+      <div id="grid" class="grid"></div>
+    </section>
+  </div>
+
+  <script>
+  (function(){
+    const grid = document.querySelector('#grid');
+    const crumbs = document.querySelector('#crumbs');
+    const errorBox = document.querySelector('#error');
+    const DEFAULT_CODE = 'kZ29hOZ00ToaEdmBum44JhXAi5YSYFWXhJk';
+
+    let ROOT=null, CURRENT_PATH='', ACTIVE_BASE='', ACTIVE_CODE='';
+
+    function nodeByPath(root, path){
+      if(!path) return root;
+      const segs = path.split('/').filter(Boolean);
+      let n=root; for(const s of segs){ if(!n||!n.contents) return null; n=n.contents.find(x=>x.isfolder&&x.name===s); }
+      return n;
+    }
+
+    function renderCrumbs(){
+      const segs=CURRENT_PATH.split('/').filter(Boolean);
+      let acc=''; const out=[`<a href="#" data-path="">Start</a>`];
+      for(const s of segs){ acc+=s+'/'; out.push('<span class="sep">›</span>'); out.push(`<a href="#" data-path="${acc}">${s}</a>`); }
+      crumbs.innerHTML=out.join(' ');
+      crumbs.querySelectorAll('a').forEach(a=>a.addEventListener('click',e=>{e.preventDefault(); CURRENT_PATH=a.dataset.path; render();}));
+    }
+
+    function render(){
+      renderCrumbs();
+      const node=nodeByPath(ROOT,CURRENT_PATH);
+      if(!node){ grid.innerHTML='<div class="empty">Ordner nicht gefunden.</div>'; return; }
+      const fols=(node.contents||[]).filter(x=>x.isfolder);
+      const fils=(node.contents||[]).filter(x=>!x.isfolder);
+
+      const htmlFolders = fols.map(f=>`<figure class="tile folder" data-path="${CURRENT_PATH+f.name+'/'}"><div class="ph"></div><figcaption class="meta">${f.name}</figcaption></figure>`).join('');
+      const htmlFiles = fils.map(f=>{
+        const base = ACTIVE_BASE;
+        const fileid = encodeURIComponent(f.fileid);
+        const code = encodeURIComponent(ACTIVE_CODE);
+        const t = `${base}/getpubthumb?code=${code}&fileid=${fileid}&size=800x800&crop=0`;
+        // pCloud: Download als ZIP (Cross‑Origin: download-Attribut wird von manchen Browsern ignoriert)
+        // Wir hängen forcedownload=1 an und öffnen per window.open
+        const zip = `${base}/getpubzip?code=${code}&fileid=${fileid}&filename=${encodeURIComponent(f.name + '.zip')}&forcedownload=1`;
+        return `<figure class="tile">
+          <div class="ph"><img src="${t}" alt="Vorschau"></div>
+          <div class="toolbox">
+            <a class="dl-btn" href="${zip}" title="Download" aria-label="Download">
+              <span aria-hidden="true">⬇️</span> <span>Download</span>
+            </a>
+          </div>
+        </figure>`;
+      }).join('');
+
+      grid.innerHTML = htmlFolders+htmlFiles || '<div class="empty">Keine Inhalte</div>';
+      grid.querySelectorAll('.folder').forEach(card=>card.addEventListener('click',()=>{CURRENT_PATH=card.dataset.path; render();}));
+    }
+
+    async function loadPublink(code){
+      grid.innerHTML='<div class="empty">Lade…</div>';
+      try{
+        const base='https://eapi.pcloud.com';
+        const r=await fetch(base+'/showpublink?code='+encodeURIComponent(code));
+        const d=await r.json();
+        if(!d||d.result!==0) throw new Error('API result '+(d?d.result:'null'));
+        ACTIVE_BASE=base; ACTIVE_CODE=code; ROOT=d.metadata; CURRENT_PATH=''; render();
+      }catch(e){ errorBox.style.display='block'; errorBox.textContent='Fehler: '+e.message; grid.innerHTML='<div class="empty">Fehler</div>'; }
+    }
+
+    document.addEventListener('DOMContentLoaded',()=>{
+      loadPublink(DEFAULT_CODE);
+      // robuster Download-Handler (bypasst Canvas-Sandbox & ignoriertes download-Attribut bei Cross‑Origin)
+      document.addEventListener('click', (e)=>{
+        const btn = e.target.closest && e.target.closest('.dl-btn');
+        if(!btn) return;
+        e.preventDefault(); e.stopPropagation();
+        let url = btn.getAttribute('href') || '';
+        if(url && !/forcedownload=1/.test(url)){
+          url += (url.includes('?') ? '&' : '?') + 'forcedownload=1';
+        }
+        try{
+          const w = window.open(url, '_blank', 'noopener');
+          if(!w){ window.location.href = url; }
+        }catch{ window.location.href = url; }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>
