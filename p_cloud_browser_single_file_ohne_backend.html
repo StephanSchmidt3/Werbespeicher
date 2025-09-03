@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bilder – pCloud Galerie (Debug)</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 0; background: #fff; color: #333; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 20px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 10px; }
+    .empty { padding: 20px; text-align: center; color: #666; }
+    pre { background: #f7f7f7; border: 1px solid #ddd; padding: 10px; border-radius: 6px; overflow-x: auto; }
+    .err { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; padding: 10px; border-radius: 6px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Bilder – pCloud Galerie (Debug)</h1>
+    <section class="card" id="app">
+      <div id="error" class="err" style="display:none"></div>
+      <div id="grid" class="empty">Noch nichts geladen.</div>
+      <pre id="debug" style="display:none"></pre>
+    </section>
+  </div>
+  <script>
+(function(){
+  // ===== Hard-Reset Minimal Script (mit globalem Fehlerfänger) =====
+  function $(s){ return document.querySelector(s); }
+  var grid = $('#grid');
+  var crumbs = $('#crumbs');
+  var errorBox = $('#error');
+  var DEFAULT_CODE = 'kZ29hOZ00ToaEdmBum44JhXAi5YSYFWXhJk';
+
+  // Globaler Fehlerfänger – zeigt JS-Fehler direkt auf der Seite an
+  window.addEventListener('error', function(ev){
+    try{
+      errorBox.style.display='block';
+      errorBox.textContent = 'Scriptfehler: ' + ev.message + (ev.filename? (' @ '+ev.filename+':'+ev.lineno):'');
+    }catch(_){ }
+  });
+
+  var IMG_EXT = ['jpg','jpeg','png','gif','webp','bmp','tif','tiff','heic','heif'];
+  function isImg(n){ n=n||''; var e=n.split('.').pop(); return e && IMG_EXT.indexOf(e.toLowerCase())>-1; }
+
+  var ACTIVE_BASE='';
+  var ACTIVE_CODE='';
+  var ROOT=null;
+  var CURRENT_PATH='';
+
+  function nodeByPath(root, path){
+    if(!path) return root;
+    var segs = path.split('/').filter(function(x){return !!x;});
+    var n = root; var i,j;
+    for(i=0;i<segs.length;i++){
+      if(!n || !n.contents) return null;
+      var next=null;
+      for(j=0;j<n.contents.length;j++){
+        var it=n.contents[j];
+        if(it.isfolder && it.name===segs[i]){ next=it; break; }
+      }
+      n = next;
+    }
+    return n;
+  }
+
+  function renderCrumbs(){
+    var segs = CURRENT_PATH.split('/').filter(function(x){return !!x;});
+    var acc=''; var parts=['<a href="#" data-path="">Start</a>'];
+    for(var i=0;i<segs.length;i++){ var s=segs[i]; acc+=s+'/'; parts.push('<span class="sep">›</span>'); parts.push('<a href="#" data-path="'+acc+'">'+s+'</a>'); }
+    crumbs.innerHTML = parts.join(' ');
+    var links = crumbs.querySelectorAll('a');
+    for(var k=0;k<links.length;k++){
+      links[k].addEventListener('click', function(e){ e.preventDefault(); CURRENT_PATH = this.getAttribute('data-path')||''; render(); });
+    }
+  }
+
+  function render(){
+    renderCrumbs();
+    var node = nodeByPath(ROOT, CURRENT_PATH);
+    if(!node){ grid.innerHTML = '<div class="empty">Ordner nicht gefunden.</div>'; return; }
+    var folders = (node.contents||[]).filter(function(x){ return x.isfolder; });
+    var files   = (node.contents||[]).filter(function(x){ return !x.isfolder; });
+
+    var htmlFolders = folders.map(function(f){
+      var path = CURRENT_PATH + f.name + '/';
+      var safe = path.replace(/\"/g,'&quot;');
+      // ganz simple: nur Name anzeigen, ohne Collage (um Fehlerquellen auszuschließen)
+      return '<figure class="tile folder" data-path="'+safe+'">
+  <div class="ph" style="height:80px; background:#f8fafc;"></div>
+  <figcaption class="meta"><div class="name">'+f.name+'</div></figcaption>
+</figure>';
+    }).join('');
+
+    var htmlFiles = files.map(function(f){
+      var safe = (CURRENT_PATH + f.name).replace(/\"/g,'&quot;');
+      var thumb = isImg(f.name) ? (ACTIVE_BASE+'/getpubthumb?code='+encodeURIComponent(ACTIVE_CODE)+'&fileid='+encodeURIComponent(f.fileid)+'&size=400x400&crop=0') : 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+      return '<figure class="tile">
+  <div class="ph"><img loading="lazy" src="'+thumb+'" alt="'+safe+'"></div>
+  <figcaption class="meta"><div class="name">'+f.name+'</div></figcaption>
+</figure>';
+    }).join('');
+
+    grid.innerHTML = (htmlFolders||'') + (htmlFiles||'');
+
+    var cards = grid.querySelectorAll('.folder');
+    for(var c=0;c<cards.length;c++){
+      (function(card){ card.addEventListener('click', function(){ CURRENT_PATH = card.getAttribute('data-path'); render(); }); })(cards[c]);
+    }
+  }
+
+  function normalizeMeta(j){
+    var m = j && j.metadata; if(Array.isArray(m)) m = m[0];
+    if(m && m.metadata && !m.contents && m.metadata.contents) m = m.metadata;
+    return m;
+  }
+
+  function loadPublink(code){
+    grid.innerHTML = '<div class="empty">Lade…</div>';
+    errorBox.style.display='none';
+    // Start mit EU-Endpoint (stabilster Weg), ohne Fallback – erstmal zum Testen
+    var base = 'https://eapi.pcloud.com';
+    fetch(base + '/showpublink?code=' + encodeURIComponent(code), { cache:'no-store' })
+      .then(function(res){ return res.json(); })
+      .then(function(data){
+        if(!data){ throw new Error('leere Antwort'); }
+        if(data.result !== 0){ throw new Error('API result '+data.result); }
+        var meta = normalizeMeta(data);
+        if(!meta){ throw new Error('keine Metadaten'); }
+        ACTIVE_BASE = base; ACTIVE_CODE = code; ROOT = meta; CURRENT_PATH = '';
+        render();
+      })
+      .catch(function(err){ errorBox.style.display='block'; errorBox.textContent = 'Fehler beim Laden: '+ err.message; });
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){ loadPublink(DEFAULT_CODE); });
+})();
+</script>
+</body>
+</html>
